@@ -279,6 +279,7 @@ def verify_otp():
     if not _rate_limit(ip):
         return jsonify({"error": "Rate limited"}), 429
 
+    # CHANGED: 'bankAccountRef' instead of 'linkedBankAccount'
     data, err = _require_json(
         (
             "otp",
@@ -287,7 +288,7 @@ def verify_otp():
             "taxCategory",
             "businessType",
             "location",
-            "linkedBankAccount",
+            "bankAccountRef",  # ← CHANGED HERE
             "tinNumber",
         )
     )
@@ -305,11 +306,13 @@ def verify_otp():
     claimed_tax_category = int(data["taxCategory"])
     business_type = int(data["businessType"])
     area = int(data["location"])
-    linked_bank_account = str(data["linkedBankAccount"])
+    # CHANGED: Use bankAccountRef from request
+    bank_account_ref = str(data.get("bankAccountRef", ""))
     tin_number = str(data["tinNumber"])
     bank_name = str(data.get("bankName", ""))
     account_holder_name = str(data.get("accountHolderName", ""))
     bank_account_number = str(data.get("bankAccountNumber", ""))
+    
     if claimed_tax_category != 0 and not tin_number.strip():
         return jsonify({"error": "TIN / business registry number is required"}), 400
 
@@ -366,15 +369,22 @@ def verify_otp():
 
     zero_addr = "0x0000000000000000000000000000000000000000"
     effective_linked_bank_account = zero_addr
-    if derived_tax_category == 1:
+    
+    # CHANGED: Use bank_account_ref for Category A
+    if derived_tax_category == 1:  # Category A
         if (
-            Web3.is_address(linked_bank_account)
-            and linked_bank_account.lower() != zero_addr
+            Web3.is_address(bank_account_ref)
+            and bank_account_ref.lower() != zero_addr
         ):
-            effective_linked_bank_account = Web3.to_checksum_address(linked_bank_account)
+            effective_linked_bank_account = Web3.to_checksum_address(bank_account_ref)
         elif bank_name.strip() and account_holder_name.strip() and bank_account_number.strip():
             effective_linked_bank_account = _bank_reference_to_address(
                 bank_name, account_holder_name, bank_account_number
+            )
+        elif bank_account_ref.strip():
+            # If just a simple bank account number was provided, convert it
+            effective_linked_bank_account = _bank_reference_to_address(
+                "provided", "holder", bank_account_ref
             )
         else:
             effective_linked_bank_account = zero_addr
@@ -392,7 +402,8 @@ def verify_otp():
             return jsonify({"error": "Category A requires a non-zero bank account reference"}), 400
     else:
         if effective_linked_bank_account.lower() != zero_addr:
-            return jsonify({"error": "Only Category A uses linkedBankAccount"}), 400
+            # Not an error, just ignore for non-Category A
+            effective_linked_bank_account = zero_addr
 
     fayda_hash = _fayda_hash(fayda_number)
 
@@ -480,4 +491,3 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     app.run(host="0.0.0.0", port=port, debug=False)
-
